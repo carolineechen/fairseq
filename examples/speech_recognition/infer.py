@@ -54,7 +54,7 @@ output units",
     )
     parser.add_argument(
         "--w2l-decoder",
-        choices=["viterbi", "kenlm", "fairseqlm"],
+        choices=["viterbi", "kenlm", "fairseqlm", "torchaudio"],
         help="use a w2l decoder",
     )
     parser.add_argument("--lexicon", help="lexicon for w2l decoder")
@@ -82,6 +82,12 @@ output units",
         type=str,
         default=None,
         help="if present, loads emissions from this file",
+    )
+    parser.add_argument(
+        "--lm-dict",
+        type=str,
+        default=None,
+        help="dictionary used for LM",
     )
     return parser
 
@@ -116,12 +122,16 @@ def process_predictions(
     args, hypos, sp, tgt_dict, target_tokens, res_files, speaker, id
 ):
     for hypo in hypos[: min(len(hypos), args.nbest)]:
-        hyp_pieces = tgt_dict.string(hypo["tokens"].int().cpu())
-
-        if "words" in hypo:
-            hyp_words = " ".join(hypo["words"])
+        if args.w2l_decoder == "torchaudio":
+            hyp_pieces = tgt_dict.string(hypo.tokens.int().cpu())  # comment
+            hyp_words = " ".join(hypo.words)
         else:
-            hyp_words = post_process(hyp_pieces, args.post_process)
+            hyp_pieces = tgt_dict.string(hypo["tokens"].int().cpu())
+
+            if "words" in hypo:
+                hyp_words = " ".join(hypo["words"])
+            else:
+                hyp_words = post_process(hyp_pieces, args.post_process)
 
         if res_files is not None:
             print(
@@ -281,9 +291,13 @@ def main(args, task=None, model_state=None):
             from examples.speech_recognition.w2l_decoder import W2lFairseqLMDecoder
 
             return W2lFairseqLMDecoder(args, task.target_dictionary)
+        elif w2l_decoder == "torchaudio":
+            from examples.speech_recognition.w2l_decoder import W2lTorchaudioDecoder
+
+            return W2lTorchaudioDecoder(args, task.target_dictionary)
         else:
             print(
-                "only flashlight decoders with (viterbi, kenlm, fairseqlm) options are supported at the moment"
+                "only flashlight decoders with (viterbi, kenlm, fairseqlm, torchaudio) options are supported at the moment"
             )
 
     # please do not touch this unless you test both generate.py and infer.py with audio_pretraining task
@@ -355,7 +369,12 @@ def main(args, task=None, model_state=None):
                         features[id.item()] = (feat[i], padding)
                     continue
             hypos = task.inference_step(generator, models, sample, prefix_tokens)
-            num_generated_tokens = sum(len(h[0]["tokens"]) for h in hypos)
+
+            if args.w2l_decoder == "torchaudio":
+                num_generated_tokens = sum(torch.numel(h[0].tokens) for h in hypos)  # comment
+            else:
+                num_generated_tokens = sum(len(h[0]["tokens"]) for h in hypos)
+            
             gen_timer.stop(num_generated_tokens)
 
             for i, sample_id in enumerate(sample["id"].tolist()):
